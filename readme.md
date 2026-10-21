@@ -1,100 +1,120 @@
-# ReservaFácil — API REST, Contratos e Integração entre Serviços
+# ReservaFácil
 
-> Este README é a especificação funcional e arquitetural para implementação de uma aplicação baseada no estudo de caso da Aula 1 (Unidade 4). Ele **não contém código** — a implementação deve ser feita por outra IA/desenvolvedor a partir destas instruções.
+Aplicação de demonstração para consulta de hotéis e confirmação de reservas com pagamento. O repositório implementa quatro serviços Spring Boot independentes, que se comunicam por HTTP: um BFF para o aplicativo móvel e três serviços de domínio.
 
-## Stack obrigatória
+> Esta documentação descreve o código presente no repositório. O aplicativo móvel, a interface do painel dos hotéis, um API Gateway e uma integração com uma operadora de pagamentos não fazem parte desta implementação.
 
-- **Linguagem: Java** (17 ou 21 LTS)
-- **Framework: Spring Boot 3.x** (pode usar Spring Web, Spring Data JPA, Bean Validation)
-- Build: Maven ou Gradle (escolha livre)
-- Banco de dados: um banco relacional por serviço (H2 aceitável para desenvolvimento/testes; PostgreSQL recomendado para um cenário mais realista)
-- Documentação de API: springdoc-openapi (OpenAPI 3), seguindo a abordagem **contract-first** no serviço de Pagamentos
-- Testes de contrato consumidor-provedor: Pact (pact-jvm) — recomendado, pois é o padrão ensinado no caso
+## Arquitetura
 
-## Contexto de negócio
+### C4 — Contexto
 
-A ReservaFácil intermedeia reservas em cerca de 1.200 hotéis parceiros de médio porte. Hóspedes usam um aplicativo móvel para pesquisar hotéis, consultar disponibilidade, confirmar uma reserva e pagar por ela. Funcionários dos hotéis usam um painel Web para acompanhar as reservas recebidas.
+O hóspede interage com a plataforma por meio do aplicativo móvel. O aplicativo é externo a este repositório; o BFF é a entrada HTTP implementada para o fluxo de reserva.
 
-O requisito central é permitir que o aplicativo finalize uma reserva completa (verificar disponibilidade, bloquear o quarto, cobrar o hóspede e confirmar a reserva) em **uma única interação percebida pelo usuário**, com uma experiência rápida mesmo em redes móveis instáveis.
+```mermaid
+C4Context
+    title Contexto do sistema ReservaFácil
 
-## Arquitetura a construir
+    Person(hospede, "Hóspede", "Pesquisa hotéis e solicita uma reserva.")
+    System(reservafacil, "ReservaFácil", "Plataforma de hotéis, reservas e pagamentos.")
 
-Implementar como **múltiplos serviços Spring Boot independentes** (um processo/projeto por serviço), cada um com seu próprio banco de dados:
+    Rel(hospede, reservafacil, "Usa pelo aplicativo móvel", "HTTPS/JSON")
+```
 
-1. **hoteis-service** — catálogo de hotéis, fotos, comodidades
-2. **reservas-service** — disponibilidade de quartos e ciclo de vida da reserva
-3. **pagamentos-service** — cobranças (cartão/Pix) e registro de transações
-4. **bff-mobile** — Backend for Frontend do aplicativo móvel, que orquestra os três serviços acima
+### C4 — Containers
 
-> O API Gateway e o BFF do painel Web das clínicas (mencionados no caso como porta de entrada única e segurança perimetral) são **opcionais/stretch goal** — o núcleo obrigatório é o BFF do aplicativo móvel orquestrando os três serviços de domínio.
+Cada serviço é um módulo Maven executável e tem seu próprio banco H2 em memória. O BFF coordena as chamadas síncronas entre os serviços; não há mensageria nesta implementação.
 
-## Requisitos funcionais e não funcionais
+```mermaid
+C4Container
+    title Containers da plataforma ReservaFácil
 
-| Tipo | Requisito | Implicação arquitetural obrigatória |
-|---|---|---|
-| Funcional | Confirmar reserva com pagamento em uma única ação do hóspede | O BFF deve coordenar as chamadas a Reservas e Pagamentos |
-| Desempenho | Tela de confirmação em até 2 segundos (p95, rede 4G) | Minimizar idas e voltas entre app e back-end (daí o BFF) |
-| Confiabilidade | Nunca cobrar duas vezes a mesma reserva | Operações de pagamento devem ser idempotentes |
-| Evolutividade | Cada serviço publicado de forma independente | Contratos explícitos (OpenAPI) e testes de contrato |
-| Segurança | Apenas o titular pode consultar/alterar a própria reserva | Autenticação (pode ser simplificada, ex. header com id do usuário simulando um token) e autorização por objeto |
+    Person(hospede, "Hóspede", "Usa o aplicativo móvel, que não está neste repositório.")
 
-## Endpoints obrigatórios
+    System_Boundary(reservafacil, "ReservaFácil") {
+        Container(bff, "bff-mobile", "Java 17 / Spring Boot", "API para o aplicativo; coordena o fluxo de reserva.")
+        Container(hoteis, "hoteis-service", "Java 17 / Spring Boot", "Consulta o catálogo de hotéis.")
+        Container(reservas, "reservas-service", "Java 17 / Spring Boot", "Consulta disponibilidade e gerencia reservas.")
+        Container(pagamentos, "pagamentos-service", "Java 17 / Spring Boot", "Registra cobranças e aplica idempotência.")
 
-### reservas-service
+        ContainerDb(dbHoteis, "H2 de hotéis", "H2 em memória", "Dados do catálogo.")
+        ContainerDb(dbReservas, "H2 de reservas", "H2 em memória", "Quartos e reservas.")
+        ContainerDb(dbPagamentos, "H2 de pagamentos", "H2 em memória", "Pagamentos e chaves de idempotência.")
+    }
 
-| Verbo | Rota | Comportamento |
-|---|---|---|
-| GET | `/v1/quartos/disponibilidade?hotel=&entrada=&saida=` | Consulta quartos livres no período; `200 OK` com a lista |
-| POST | `/v1/reservas` | Cria uma **pré-reserva** com o quarto bloqueado por **15 minutos**; `201 Created` + header `Location` |
-| GET | `/v1/reservas/{id}` | Consulta uma reserva; `200 OK`, `403` se não pertencer ao usuário, `404` se não existir |
-| POST | `/v1/reservas/{id}/confirmacao` | Confirma a pré-reserva após o pagamento; `200 OK` ou `409 Conflict` se a pré-reserva expirou |
-| DELETE | `/v1/reservas/{id}` | Cancela a reserva; `204 No Content` |
+    Rel(hospede, bff, "Solicita a confirmação de reserva", "HTTP/JSON")
+    Rel(bff, hoteis, "Consulta dados do hotel", "HTTP/JSON")
+    Rel(bff, reservas, "Consulta disponibilidade, cria/cancela pré-reserva e confirma", "HTTP/JSON")
+    Rel(bff, pagamentos, "Solicita cobrança idempotente", "HTTP/JSON")
+    Rel(hoteis, dbHoteis, "Lê", "JPA")
+    Rel(reservas, dbReservas, "Lê e grava", "JPA")
+    Rel(pagamentos, dbPagamentos, "Lê e grava", "JPA")
+```
 
-### pagamentos-service
+### C4 — Componentes do BFF Mobile
 
-| Verbo | Rota | Comportamento |
-|---|---|---|
-| POST | `/v1/pagamentos` | Cria uma cobrança; `201 Created`, `402 Payment Required` se recusada pela operadora |
-| GET | `/v1/pagamentos/{id}` | Consulta o status de uma cobrança; `200 OK` |
+```mermaid
+C4Component
+    title Componentes do bff-mobile
 
-**Idempotência obrigatória:** toda requisição `POST /v1/pagamentos` deve exigir o header `Idempotency-Key` (UUID gerado pelo cliente). O serviço armazena a chave junto com o resultado da primeira execução; uma segunda requisição com a mesma chave deve devolver o **mesmo resultado já registrado**, sem processar uma nova cobrança.
+    Container_Boundary(bff, "bff-mobile") {
+        Component(controller, "BookingController", "Spring MVC", "Valida a requisição e os headers do hóspede e da chave de idempotência.")
+        Component(service, "BookingService", "Serviço de aplicação", "Consulta hotel, disponibilidade e coordena reserva, cobrança e compensação.")
+        Component(http, "RestTemplate", "Cliente HTTP", "Executa chamadas aos serviços internos com timeout configurado.")
+    }
 
-### bff-mobile
+    System_Ext(app, "Aplicativo móvel", "Cliente externo ao repositório.")
+    Container(hoteis, "hoteis-service", "Spring Boot", "Catálogo de hotéis.")
+    Container(reservas, "reservas-service", "Spring Boot", "Disponibilidade e reservas.")
+    Container(pagamentos, "pagamentos-service", "Spring Boot", "Pagamentos idempotentes.")
 
-| Verbo | Rota | Comportamento |
-|---|---|---|
-| POST | `/app/v1/confirmacoes-reserva` | Orquestra: consulta o hotel → cria a pré-reserva → solicita a cobrança (com `Idempotency-Key`) → se aprovada, confirma a reserva; se recusada, **cancela a pré-reserva** (ação compensatória) e devolve erro claro de pagamento recusado |
+    Rel(app, controller, "Envia solicitação", "HTTP/JSON")
+    Rel(controller, service, "Invoca")
+    Rel(service, http, "Usa")
+    Rel(http, hoteis, "Consulta hotel", "HTTP")
+    Rel(http, reservas, "Consulta/cria/cancela/confirma reserva", "HTTP")
+    Rel(http, pagamentos, "Cria pagamento", "HTTP")
+```
 
-**Timeouts internos obrigatórios no BFF:** cada chamada interna deve ter um timeout curto (sugestão: 300–500 ms) para que a lentidão de um serviço não trave a experiência do usuário. Na ausência da foto do hotel (timeout no `hoteis-service`), a resposta deve seguir com uma imagem/dado padrão em vez de falhar.
+## Serviços e APIs
 
-## Modelo de dados sugerido
+| Módulo | Porta padrão | Responsabilidade | Endpoints principais |
+|---|---:|---|---|
+| `hoteis-service` | `8081` | Catálogo de hotéis, fotos e comodidades | `GET /v1/hoteis`, `GET /v1/hoteis/{id}` |
+| `reservas-service` | `8082` | Disponibilidade e ciclo de vida das reservas | `GET /v1/quartos/disponibilidade`, `POST /v1/reservas`, `GET /v1/reservas/{id}`, `GET /v1/reservas/idempotencia/{chave}`, `POST /v1/reservas/{id}/confirmacao`, `DELETE /v1/reservas/{id}` |
+| `pagamentos-service` | `8083` | Registro e consulta de cobranças | `POST /v1/pagamentos`, `GET /v1/pagamentos/{id}` |
+| `bff-mobile` | `8080` | API do aplicativo e orquestração do fluxo de reserva | `POST /app/v1/confirmacoes-reserva` |
 
-**Reserva** (reservas-service): `id`, `hotelId`, `quartoId`, `hospedeId`, `status` (`PRE_RESERVADA`, `CONFIRMADA`, `CANCELADA`, `EXPIRADA`), `criadaEm`, `expiraEm`
+Todos os serviços publicam OpenAPI em `/v3/api-docs` e Swagger UI em `/swagger-ui.html`. O contrato OpenAPI de pagamentos está em [`pagamentos-service/src/main/resources/static/openapi.yaml`](pagamentos-service/src/main/resources/static/openapi.yaml) e é exposto em `/openapi.yaml`.
 
-**Pagamento** (pagamentos-service): `id`, `reservaId`, `valor`, `moeda`, `metodo` (`CARTAO`, `PIX`), `status` (`APROVADO`, `RECUSADO`), `idempotencyKey` (única)
+## Fluxo de confirmação
 
-## Padrões obrigatórios a demonstrar
+1. O BFF recebe hotel, quarto, datas, método de pagamento, `X-User-Id` e um UUID em `Idempotency-Key`.
+2. Consulta os dados do hotel. Se a chamada falhar por timeout/conexão, usa dados padrão para a resposta.
+3. Consulta a disponibilidade e cria uma pré-reserva, que bloqueia o quarto por 15 minutos.
+4. Solicita o pagamento usando a mesma chave de idempotência. Uma repetição da chave no serviço de pagamentos retorna o resultado previamente registrado, sem criar uma nova cobrança.
+5. Se o pagamento for recusado, o BFF tenta cancelar a pré-reserva e responde com erro de pagamento.
+6. Se aprovado, confirma a reserva e retorna os dados do hotel, da reserva e do pagamento.
 
-1. **Versionamento de API por URI** (`/v1/...`), com uma política clara de mudanças compatíveis (ex. novo campo opcional) vs. incompatíveis (ex. remover/renomear campo) documentada no OpenAPI.
-2. **Especificação OpenAPI** publicada por cada serviço, especialmente o `pagamentos-service` (contract-first).
-3. **Padrão Backend for Frontend (BFF)** no `bff-mobile`, com ação compensatória em caso de falha parcial.
-4. **Idempotência** na criação de pagamentos via header `Idempotency-Key`.
-5. **Testes de contrato consumidor-provedor** (Pact) entre o `bff-mobile` (consumidor) e o `pagamentos-service` (provedor), verificando que o contrato publicado continua compatível a cada mudança.
+O header `X-User-Id` representa a identidade do hóspede para este estudo; não é autenticação real. O serviço de reservas verifica que operações sobre uma reserva pertencem ao titular. O campo `simularRecusa` permite exercitar o caminho de pagamento recusado.
 
-## Critérios de aceite
+## Requisitos
 
-- [ ] Os 4 serviços sobem independentemente e se comunicam via HTTP
-- [ ] Fluxo completo de reserva (disponibilidade → pré-reserva → pagamento → confirmação) funciona de ponta a ponta via o endpoint do BFF
-- [ ] Reenviar a mesma requisição de pagamento com a mesma `Idempotency-Key` não gera cobrança duplicada
-- [ ] Se o pagamento for recusado, a pré-reserva é cancelada automaticamente (ação compensatória)
-- [ ] Cada serviço expõe sua documentação OpenAPI (ex. `/v3/api-docs`, `/swagger-ui.html`)
-- [ ] Teste de contrato Pact entre BFF e serviço de Pagamentos presente e passando
+- Java 17
+- Maven 3.8+
 
-## Executar a implementação
+## Compilar e testar
 
-Requisitos locais: Java 17 e Maven 3.8+. Na raiz do repositório, execute `mvn clean verify` para compilar os quatro módulos e rodar os testes, inclusive a verificação Pact do provedor.
+Na raiz do repositório:
 
-Inicie cada comando em um terminal separado:
+```bash
+mvn clean verify
+```
+
+O build executa os testes dos módulos, incluindo testes Pact consumidor/provedor entre `bff-mobile` e `pagamentos-service`.
+
+## Executar localmente
+
+Inicie cada serviço em um terminal separado, a partir da raiz:
 
 ```bash
 mvn -pl hoteis-service spring-boot:run
@@ -103,11 +123,18 @@ mvn -pl pagamentos-service spring-boot:run
 mvn -pl bff-mobile spring-boot:run
 ```
 
-Os serviços usam as portas `8081` (hotéis), `8082` (reservas), `8083` (pagamentos) e `8080` (BFF). Cada um possui seu próprio banco H2 em memória. As URLs internas do BFF podem ser alteradas com `HOTEIS_SERVICE_URL`, `RESERVAS_SERVICE_URL` e `PAGAMENTOS_SERVICE_URL`; `INTERNAL_TIMEOUT` configura o timeout por chamada (padrão `400ms`).
+Os três serviços de domínio têm bancos H2 independentes e em memória; os dados não persistem após o encerramento do processo. Todos os serviços permitem configurar a porta com `SERVER_PORT`; os serviços de domínio também aceitam `DATABASE_URL`. O BFF usa estas configurações:
 
-Cada serviço publica OpenAPI em `/v3/api-docs` e Swagger UI em `/swagger-ui.html`. O contrato OpenAPI de pagamentos, mantido como especificação antes da implementação, também está em `/openapi.yaml`.
+| Variável | Padrão |
+|---|---|
+| `HOTEIS_SERVICE_URL` | `http://localhost:8081` |
+| `RESERVAS_SERVICE_URL` | `http://localhost:8082` |
+| `PAGAMENTOS_SERVICE_URL` | `http://localhost:8083` |
+| `INTERNAL_TIMEOUT` | `400ms` |
 
-Exemplo de confirmação ponta a ponta:
+## Exemplo de requisição
+
+Com os quatro serviços em execução:
 
 ```bash
 curl -i http://localhost:8080/app/v1/confirmacoes-reserva \
@@ -117,4 +144,4 @@ curl -i http://localhost:8080/app/v1/confirmacoes-reserva \
   -d '{"hotelId":1,"quartoId":101,"entrada":"2027-01-10","saida":"2027-01-12","metodo":"CARTAO"}'
 ```
 
-`X-User-Id` simula a identidade autenticada do hóspede neste estudo. Reutilize a mesma `Idempotency-Key` ao repetir uma solicitação. Para demonstrar a compensação de pagamento recusado, inclua `"simularRecusa":true`; a pré-reserva será cancelada.
+Para simular recusa, inclua `"simularRecusa":true` no JSON. Ao repetir uma tentativa, reutilize a mesma `Idempotency-Key`; para uma nova tentativa, gere um novo UUID.
