@@ -6,4 +6,5 @@ import java.util.List;
 
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
     List<Reservation> findByQuartoIdAndStatusIn(Long quartoId, List<ReservationStatus> statuses);
+    java.util.Optional<Reservation> findByIdempotencyKey(String idempotencyKey);
 }

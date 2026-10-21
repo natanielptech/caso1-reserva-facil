@@ -32,8 +32,28 @@ public class ReservationService {
     }
 
     @Transactional
-    public Reservation criar(CreateReservationRequest request, String hospedeId) {
+    public Reservation criar(CreateReservationRequest request, String hospedeId, String idempotencyKey) {
         validarPeriodo(request.entrada(), request.saida());
+        if (idempotencyKey != null) {
+            Reservation existing = reservations.findByIdempotencyKey(idempotencyKey).orElse(null);
+            if (existing != null) {
+                boolean sameRequest = existing.getHospedeId().equals(hospedeId)
+                        && existing.getHotelId().equals(request.hotelId())
+                        && existing.getQuartoId().equals(request.quartoId())
+                        && existing.getEntrada().equals(request.entrada())
+                        && existing.getSaida().equals(request.saida());
+                if (!sameRequest) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Idempotency-Key já utilizada em outra solicitação");
+                }
+                if (existing.getStatus() == ReservationStatus.CANCELADA
+                        || existing.getStatus() == ReservationStatus.EXPIRADA) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Esta tentativa foi encerrada; use uma nova Idempotency-Key");
+                }
+                return existing;
+            }
+        }
         Room room = rooms.findByIdForUpdate(request.quartoId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Quarto não encontrado"));
         if (!room.getHotelId().equals(request.hotelId())) {
@@ -46,8 +66,8 @@ public class ReservationService {
         if (ocupado) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Quarto indisponível para o período");
         }
-        return reservations.save(new Reservation(request.hotelId(), request.quartoId(), hospedeId,
-                request.entrada(), request.saida(), now, now.plusSeconds(15 * 60)));
+        return reservations.save(new Reservation(request.hotelId(), request.quartoId(), room.getValorDiaria(),
+                hospedeId, request.entrada(), request.saida(), now, now.plusSeconds(15 * 60), idempotencyKey));
     }
 
     @Transactional
@@ -63,6 +83,9 @@ public class ReservationService {
         Reservation reservation = buscar(id);
         autorizar(reservation, hospedeId);
         expirarSeNecessario(reservation);
+        if (reservation.getStatus() == ReservationStatus.CONFIRMADA) {
+            return reservation;
+        }
         if (reservation.getStatus() != ReservationStatus.PRE_RESERVADA) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Pré-reserva não está mais ativa");
         }
@@ -122,11 +145,12 @@ public class ReservationService {
         }
     }
 
-    public record ReservationResponse(Long id, Long hotelId, Long quartoId, String hospedeId, LocalDate entrada,
+    public record ReservationResponse(Long id, Long hotelId, Long quartoId, java.math.BigDecimal valorDiaria,
+                                       String hospedeId, LocalDate entrada,
                                        LocalDate saida, ReservationStatus status, Instant criadaEm, Instant expiraEm) {
         static ReservationResponse from(Reservation reservation) {
             return new ReservationResponse(reservation.getId(), reservation.getHotelId(), reservation.getQuartoId(),
-                    reservation.getHospedeId(), reservation.getEntrada(), reservation.getSaida(),
+                    reservation.getValorDiaria(), reservation.getHospedeId(), reservation.getEntrada(), reservation.getSaida(),
                     reservation.getStatus(), reservation.getCriadaEm(), reservation.getExpiraEm());
         }
     }

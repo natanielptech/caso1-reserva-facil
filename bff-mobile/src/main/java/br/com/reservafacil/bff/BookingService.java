@@ -16,7 +16,6 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.Arrays;
 
 @Service
 public class BookingService {
@@ -48,6 +47,11 @@ public class BookingService {
                 + "/v1/quartos/disponibilidade?hotel={hotel}&entrada={entrada}&saida={saida}";
         RoomResponse[] available = http.getForObject(availabilityUrl, RoomResponse[].class,
                 request.hotelId(), request.entrada(), request.saida());
+        if (available == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Serviço de reservas retornou disponibilidade vazia");
+        }
+        // The reservation service is authoritative; the same key may resolve to an existing booking on retry.
         boolean roomAvailable = available != null && Arrays.stream(available)
                 .anyMatch(room -> room.id().equals(request.quartoId()));
         if (!roomAvailable) {
@@ -56,6 +60,7 @@ public class BookingService {
 
         HttpHeaders userHeaders = new HttpHeaders();
         userHeaders.set("X-User-Id", userId);
+        userHeaders.set("Idempotency-Key", idempotencyKey);
         userHeaders.setContentType(MediaType.APPLICATION_JSON);
         ReservationResponse reservation = http.postForObject(reservationsUrl + "/v1/reservas",
                 new HttpEntity<>(new ReservationRequest(request.hotelId(), request.quartoId(),
@@ -64,9 +69,11 @@ public class BookingService {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Serviço de reservas retornou resposta vazia");
         }
 
-        BigDecimal amount = available == null ? BigDecimal.ZERO : Arrays.stream(available)
-                .filter(room -> room.id().equals(request.quartoId()))
-                .findFirst().orElseThrow().valorDiaria()
+        if (reservation.status().equals("CANCELADA") || reservation.status().equals("EXPIRADA")) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Esta tentativa foi encerrada; use uma nova Idempotency-Key");
+        }
+        BigDecimal amount = reservation.valorDiaria()
                 .multiply(BigDecimal.valueOf(ChronoUnit.DAYS.between(request.entrada(), request.saida())));
         HttpHeaders paymentHeaders = new HttpHeaders();
         paymentHeaders.setContentType(MediaType.APPLICATION_JSON);
@@ -122,7 +129,8 @@ public class BookingService {
     public record ReservationRequest(Long hotelId, Long quartoId, LocalDate entrada, LocalDate saida) {
     }
 
-    public record ReservationResponse(Long id, Long hotelId, Long quartoId, String hospedeId, LocalDate entrada,
+    public record ReservationResponse(Long id, Long hotelId, Long quartoId, BigDecimal valorDiaria,
+                                      String hospedeId, LocalDate entrada,
                                       LocalDate saida, String status, String criadaEm, String expiraEm) {
     }
 

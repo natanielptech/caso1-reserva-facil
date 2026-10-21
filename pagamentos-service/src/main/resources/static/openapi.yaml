@@ -40,25 +40,6 @@ paths:
                 $ref: '#/components/schemas/Pagamento'
         '400':
           description: Chave inválida ou dados inválidos
-    get:
-      operationId: consultarPagamento
-      summary: Consulta uma cobrança
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: Cobrança encontrada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Pagamento'
-        '404':
-          description: Cobrança não encontrada
   /v1/pagamentos/{id}:
     get:
       operationId: obterPagamento

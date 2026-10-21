@@ -37,8 +37,9 @@ public class ReservationController {
     @PostMapping("/reservas")
     public ResponseEntity<ReservationService.ReservationResponse> criar(
             @Valid @RequestBody ReservationService.CreateReservationRequest request,
-            @RequestHeader("X-User-Id") String hospedeId) {
-        Reservation reservation = service.criar(request, hospedeId);
+            @RequestHeader("X-User-Id") String hospedeId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        Reservation reservation = service.criar(request, hospedeId, idempotencyKey);
         return ResponseEntity.created(URI.create("/v1/reservas/" + reservation.getId()))
                 .body(ReservationService.ReservationResponse.from(reservation));
     }
