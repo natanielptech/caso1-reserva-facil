@@ -45,18 +45,8 @@ public class BookingService {
 
         String availabilityUrl = reservationsUrl
                 + "/v1/quartos/disponibilidade?hotel={hotel}&entrada={entrada}&saida={saida}";
-        RoomResponse[] available = http.getForObject(availabilityUrl, RoomResponse[].class,
+        http.getForObject(availabilityUrl, RoomResponse[].class,
                 request.hotelId(), request.entrada(), request.saida());
-        if (available == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                    "Serviço de reservas retornou disponibilidade vazia");
-        }
-        // The reservation service is authoritative; the same key may resolve to an existing booking on retry.
-        boolean roomAvailable = available != null && Arrays.stream(available)
-                .anyMatch(room -> room.id().equals(request.quartoId()));
-        if (!roomAvailable) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Quarto indisponível para o período");
-        }
 
         HttpHeaders userHeaders = new HttpHeaders();
         userHeaders.set("X-User-Id", userId);

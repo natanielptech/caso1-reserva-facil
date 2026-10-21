@@ -89,3 +89,32 @@ Implementar como **múltiplos serviços Spring Boot independentes** (um processo
 - [ ] Se o pagamento for recusado, a pré-reserva é cancelada automaticamente (ação compensatória)
 - [ ] Cada serviço expõe sua documentação OpenAPI (ex. `/v3/api-docs`, `/swagger-ui.html`)
 - [ ] Teste de contrato Pact entre BFF e serviço de Pagamentos presente e passando
+
+## Executar a implementação
+
+Requisitos locais: Java 17 e Maven 3.8+. Na raiz do repositório, execute `mvn clean verify` para compilar os quatro módulos e rodar os testes, inclusive a verificação Pact do provedor.
+
+Inicie cada comando em um terminal separado:
+
+```bash
+mvn -pl hoteis-service spring-boot:run
+mvn -pl reservas-service spring-boot:run
+mvn -pl pagamentos-service spring-boot:run
+mvn -pl bff-mobile spring-boot:run
+```
+
+Os serviços usam as portas `8081` (hotéis), `8082` (reservas), `8083` (pagamentos) e `8080` (BFF). Cada um possui seu próprio banco H2 em memória. As URLs internas do BFF podem ser alteradas com `HOTEIS_SERVICE_URL`, `RESERVAS_SERVICE_URL` e `PAGAMENTOS_SERVICE_URL`; `INTERNAL_TIMEOUT` configura o timeout por chamada (padrão `400ms`).
+
+Cada serviço publica OpenAPI em `/v3/api-docs` e Swagger UI em `/swagger-ui.html`. O contrato OpenAPI de pagamentos, mantido como especificação antes da implementação, também está em `/openapi.yaml`.
+
+Exemplo de confirmação ponta a ponta:
+
+```bash
+curl -i http://localhost:8080/app/v1/confirmacoes-reserva \
+  -H 'Content-Type: application/json' \
+  -H 'X-User-Id: hospede-123' \
+  -H 'Idempotency-Key: 123e4567-e89b-12d3-a456-426614174000' \
+  -d '{"hotelId":1,"quartoId":101,"entrada":"2027-01-10","saida":"2027-01-12","metodo":"CARTAO"}'
+```
+
+`X-User-Id` simula a identidade autenticada do hóspede neste estudo. Reutilize a mesma `Idempotency-Key` ao repetir uma solicitação. Para demonstrar a compensação de pagamento recusado, inclua `"simularRecusa":true`; a pré-reserva será cancelada.

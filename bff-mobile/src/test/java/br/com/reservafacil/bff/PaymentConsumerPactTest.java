@@ -2,10 +2,10 @@ package br.com.reservafacil.bff;
 
 import au.com.dius.pact.consumer.MockServer;
 import au.com.dius.pact.consumer.dsl.PactDslJsonBody;
-import au.com.dius.pact.consumer.dsl.PactDslWithProvider;
+import au.com.dius.pact.consumer.dsl.PactBuilder;
 import au.com.dius.pact.consumer.junit5.PactConsumerTestExt;
 import au.com.dius.pact.consumer.junit5.PactTestFor;
-import au.com.dius.pact.core.model.RequestResponsePact;
+import au.com.dius.pact.core.model.V4Pact;
 import au.com.dius.pact.core.model.annotations.Pact;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,7 +23,7 @@ class PaymentConsumerPactTest {
     private static final String IDEMPOTENCY_KEY = "123e4567-e89b-12d3-a456-426614174000";
 
     @Pact(consumer = "bff-mobile", provider = "pagamentos-service")
-    RequestResponsePact pagamentoAprovado(PactDslWithProvider builder) {
+    V4Pact pagamentoAprovado(PactBuilder builder) {
         PactDslJsonBody request = new PactDslJsonBody()
                 .integerType("reservaId", 42)
                 .decimalType("valor", 500.0)
@@ -41,17 +41,20 @@ class PaymentConsumerPactTest {
                         "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z",
                         "2026-10-21T17:00:00Z");
 
-        return builder.given("reserva pronta para pagamento")
-                .uponReceiving("uma cobrança de reserva com chave de idempotência")
-                .path("/v1/pagamentos")
-                .method("POST")
-                .headers(Map.of("Content-Type", "application/json", "Idempotency-Key", IDEMPOTENCY_KEY))
-                .body(request)
-                .willRespondWith()
-                .status(201)
-                .headers(Map.of("Content-Type", "application/json"))
-                .body(response)
-                .toPact();
+        return builder.expectsToReceiveHttpInteraction("uma cobrança de reserva com chave de idempotência",
+                interaction -> {
+                    interaction.state("reserva pronta para pagamento");
+                    interaction.withRequest(pactRequest -> pactRequest.method("POST")
+                            .path("/v1/pagamentos")
+                            .headers(Map.of("Content-Type", "application/json",
+                                    "Idempotency-Key", IDEMPOTENCY_KEY))
+                            .body(request));
+                    interaction.willRespondWith(pactResponse -> pactResponse
+                            .status(201)
+                            .headers(Map.of("Content-Type", "application/json"))
+                            .body(response));
+                    return interaction;
+                }).toPact();
     }
 
     @Test
