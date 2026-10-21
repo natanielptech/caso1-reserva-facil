@@ -43,18 +43,40 @@ public class BookingService {
             hotel = new HotelResponse(request.hotelId(), "Hotel", null, DEFAULT_PHOTO, new String[0]);
         }
 
-        String availabilityUrl = reservationsUrl
-                + "/v1/quartos/disponibilidade?hotel={hotel}&entrada={entrada}&saida={saida}";
-        http.getForObject(availabilityUrl, RoomResponse[].class,
-                request.hotelId(), request.entrada(), request.saida());
-
         HttpHeaders userHeaders = new HttpHeaders();
         userHeaders.set("X-User-Id", userId);
         userHeaders.set("Idempotency-Key", idempotencyKey);
         userHeaders.setContentType(MediaType.APPLICATION_JSON);
-        ReservationResponse reservation = http.postForObject(reservationsUrl + "/v1/reservas",
-                new HttpEntity<>(new ReservationRequest(request.hotelId(), request.quartoId(),
-                        request.entrada(), request.saida()), userHeaders), ReservationResponse.class);
+        ReservationResponse reservation;
+        try {
+            reservation = http.exchange(reservationsUrl + "/v1/reservas/idempotencia/{chave}",
+                    HttpMethod.GET, new HttpEntity<>(userHeaders), ReservationResponse.class,
+                    idempotencyKey).getBody();
+            boolean sameRequest = reservation.hotelId().equals(request.hotelId())
+                    && reservation.quartoId().equals(request.quartoId())
+                    && reservation.entrada().equals(request.entrada())
+                    && reservation.saida().equals(request.saida());
+            if (!sameRequest) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Idempotency-Key já utilizada em outra solicitação");
+            }
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode() != HttpStatus.NOT_FOUND) {
+                throw exception;
+            }
+            String availabilityUrl = reservationsUrl
+                    + "/v1/quartos/disponibilidade?hotel={hotel}&entrada={entrada}&saida={saida}";
+            RoomResponse[] available = http.getForObject(availabilityUrl, RoomResponse[].class,
+                    request.hotelId(), request.entrada(), request.saida());
+            boolean roomAvailable = available != null && java.util.Arrays.stream(available)
+                    .anyMatch(room -> room.id().equals(request.quartoId()));
+            if (!roomAvailable) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Quarto indisponível para o período");
+            }
+            reservation = http.postForObject(reservationsUrl + "/v1/reservas",
+                    new HttpEntity<>(new ReservationRequest(request.hotelId(), request.quartoId(),
+                            request.entrada(), request.saida()), userHeaders), ReservationResponse.class);
+        }
         if (reservation == null) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Serviço de reservas retornou resposta vazia");
         }
@@ -106,8 +128,12 @@ public class BookingService {
         }
     }
 
-    public record BookingRequest(Long hotelId, Long quartoId, LocalDate entrada, LocalDate saida,
-                                 PaymentMethod metodo, boolean simularRecusa) {
+    public record BookingRequest(@jakarta.validation.constraints.NotNull Long hotelId,
+                                 @jakarta.validation.constraints.NotNull Long quartoId,
+                                 @jakarta.validation.constraints.NotNull LocalDate entrada,
+                                 @jakarta.validation.constraints.NotNull LocalDate saida,
+                                 @jakarta.validation.constraints.NotNull PaymentMethod metodo,
+                                 boolean simularRecusa) {
     }
 
     public record HotelResponse(Long id, String nome, String cidade, String fotoUrl, String[] comodidades) {

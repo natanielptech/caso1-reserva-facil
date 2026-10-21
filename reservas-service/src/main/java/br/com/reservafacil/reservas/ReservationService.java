@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import jakarta.validation.constraints.NotNull;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -32,11 +33,12 @@ public class ReservationService {
     }
 
     @Transactional
-    public Reservation criar(CreateReservationRequest request, String hospedeId, String idempotencyKey) {
+    public synchronized Reservation criar(CreateReservationRequest request, String hospedeId, String idempotencyKey) {
         validarPeriodo(request.entrada(), request.saida());
         if (idempotencyKey != null) {
             Reservation existing = reservations.findByIdempotencyKey(idempotencyKey).orElse(null);
             if (existing != null) {
+                expirarSeNecessario(existing);
                 boolean sameRequest = existing.getHospedeId().equals(hospedeId)
                         && existing.getHotelId().equals(request.hotelId())
                         && existing.getQuartoId().equals(request.quartoId())
@@ -73,6 +75,15 @@ public class ReservationService {
     @Transactional
     public Reservation obterDoTitular(Long id, String hospedeId) {
         Reservation reservation = buscar(id);
+        autorizar(reservation, hospedeId);
+        expirarSeNecessario(reservation);
+        return reservation;
+    }
+
+    @Transactional
+    public Reservation obterPorChave(String idempotencyKey, String hospedeId) {
+        Reservation reservation = reservations.findByIdempotencyKey(idempotencyKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tentativa não encontrada"));
         autorizar(reservation, hospedeId);
         expirarSeNecessario(reservation);
         return reservation;
@@ -136,7 +147,8 @@ public class ReservationService {
         }
     }
 
-    public record CreateReservationRequest(Long hotelId, Long quartoId, LocalDate entrada, LocalDate saida) {
+    public record CreateReservationRequest(@NotNull Long hotelId, @NotNull Long quartoId,
+                                           @NotNull LocalDate entrada, @NotNull LocalDate saida) {
     }
 
     public record RoomResponse(Long id, Long hotelId, String nome, java.math.BigDecimal valorDiaria) {

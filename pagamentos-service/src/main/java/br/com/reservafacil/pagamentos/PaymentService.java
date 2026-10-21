@@ -38,8 +38,7 @@ public class PaymentService {
             return false;
         }
         try {
-            UUID.fromString(key);
-            return true;
+            return UUID.fromString(key).toString().equalsIgnoreCase(key);
         } catch (IllegalArgumentException exception) {
             return false;
         }

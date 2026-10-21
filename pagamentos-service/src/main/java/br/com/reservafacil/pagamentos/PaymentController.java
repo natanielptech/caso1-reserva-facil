@@ -1,6 +1,7 @@
 package br.com.reservafacil.pagamentos;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
@@ -45,7 +46,7 @@ public class PaymentController {
         return PaymentService.PaymentResponse.from(service.obter(id));
     }
 
-    public record PaymentRequest(@NotNull Long reservaId, @NotNull @Positive BigDecimal valor,
-                                @NotNull String moeda, @NotNull PaymentMethod metodo, boolean simularRecusa) {
+    public record PaymentRequest(@NotNull @Positive Long reservaId, @NotNull @Positive BigDecimal valor,
+                                 @NotBlank String moeda, @NotNull PaymentMethod metodo, boolean simularRecusa) {
     }
 }

@@ -9,11 +9,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
 
 @RestController
+@Validated
 @RequestMapping("/app/v1/confirmacoes-reserva")
 public class BookingController {
     private final BookingService service;
@@ -37,8 +39,7 @@ public class BookingController {
 
     private boolean validUuid(String value) {
         try {
-            UUID.fromString(value);
-            return true;
+            return UUID.fromString(value).toString().equalsIgnoreCase(value);
         } catch (IllegalArgumentException exception) {
             return false;
         }
