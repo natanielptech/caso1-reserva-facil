@@ -1,0 +1,126 @@
+openapi: 3.0.3
+info:
+  title: Pagamentos API
+  version: v1
+  description: >-
+    Contrato do serviço de pagamentos. Campos opcionais são compatíveis;
+    remover ou renomear campos e alterar semântica exige nova versão URI.
+servers:
+  - url: /
+paths:
+  /v1/pagamentos:
+    post:
+      operationId: criarPagamento
+      summary: Cria ou recupera a cobrança idempotente
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NovoPagamento'
+      responses:
+        '201':
+          description: Cobrança aprovada ou resultado aprovado já registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pagamento'
+        '402':
+          description: Cobrança recusada; resultado recusado já registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pagamento'
+        '400':
+          description: Chave inválida ou dados inválidos
+    get:
+      operationId: consultarPagamento
+      summary: Consulta uma cobrança
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Cobrança encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pagamento'
+        '404':
+          description: Cobrança não encontrada
+  /v1/pagamentos/{id}:
+    get:
+      operationId: obterPagamento
+      summary: Consulta o status de uma cobrança
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Cobrança encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pagamento'
+        '404':
+          description: Cobrança não encontrada
+components:
+  schemas:
+    NovoPagamento:
+      type: object
+      required: [reservaId, valor, moeda, metodo]
+      properties:
+        reservaId:
+          type: integer
+          format: int64
+        valor:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+        moeda:
+          type: string
+          example: BRL
+        metodo:
+          type: string
+          enum: [CARTAO, PIX]
+        simularRecusa:
+          type: boolean
+          description: Simula recusa do adquirente para demonstração.
+    Pagamento:
+      type: object
+      required: [id, reservaId, valor, moeda, metodo, status, criadaEm]
+      properties:
+        id:
+          type: integer
+          format: int64
+        reservaId:
+          type: integer
+          format: int64
+        valor:
+          type: number
+        moeda:
+          type: string
+        metodo:
+          type: string
+          enum: [CARTAO, PIX]
+        status:
+          type: string
+          enum: [APROVADO, RECUSADO]
+        criadaEm:
+          type: string
+          format: date-time
