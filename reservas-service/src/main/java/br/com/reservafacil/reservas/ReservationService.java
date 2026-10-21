@@ -2,7 +2,10 @@ package br.com.reservafacil.reservas;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import jakarta.validation.constraints.NotNull;
 
@@ -14,10 +17,13 @@ import java.util.List;
 public class ReservationService {
     private final RoomRepository rooms;
     private final ReservationRepository reservations;
+    private final TransactionTemplate transactions;
 
-    public ReservationService(RoomRepository rooms, ReservationRepository reservations) {
+    public ReservationService(RoomRepository rooms, ReservationRepository reservations,
+                              PlatformTransactionManager transactionManager) {
         this.rooms = rooms;
         this.reservations = reservations;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     @Transactional(readOnly = true)
@@ -32,27 +38,28 @@ public class ReservationService {
                 .toList();
     }
 
-    @Transactional
     public synchronized Reservation criar(CreateReservationRequest request, String hospedeId, String idempotencyKey) {
+        try {
+            return transactions.execute(status -> criarNaTransacao(request, hospedeId, idempotencyKey));
+        } catch (DataIntegrityViolationException exception) {
+            if (idempotencyKey == null) {
+                throw exception;
+            }
+            Reservation existing = reservations.findByIdempotencyKey(idempotencyKey).orElse(null);
+            if (existing == null) {
+                throw exception;
+            }
+            validarRepeticao(existing, request, hospedeId);
+            return existing;
+        }
+    }
+
+    private Reservation criarNaTransacao(CreateReservationRequest request, String hospedeId, String idempotencyKey) {
         validarPeriodo(request.entrada(), request.saida());
         if (idempotencyKey != null) {
             Reservation existing = reservations.findByIdempotencyKey(idempotencyKey).orElse(null);
             if (existing != null) {
-                expirarSeNecessario(existing);
-                boolean sameRequest = existing.getHospedeId().equals(hospedeId)
-                        && existing.getHotelId().equals(request.hotelId())
-                        && existing.getQuartoId().equals(request.quartoId())
-                        && existing.getEntrada().equals(request.entrada())
-                        && existing.getSaida().equals(request.saida());
-                if (!sameRequest) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Idempotency-Key já utilizada em outra solicitação");
-                }
-                if (existing.getStatus() == ReservationStatus.CANCELADA
-                        || existing.getStatus() == ReservationStatus.EXPIRADA) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Esta tentativa foi encerrada; use uma nova Idempotency-Key");
-                }
+                validarRepeticao(existing, request, hospedeId);
                 return existing;
             }
         }
@@ -70,6 +77,24 @@ public class ReservationService {
         }
         return reservations.save(new Reservation(request.hotelId(), request.quartoId(), room.getValorDiaria(),
                 hospedeId, request.entrada(), request.saida(), now, now.plusSeconds(15 * 60), idempotencyKey));
+    }
+
+    private void validarRepeticao(Reservation existing, CreateReservationRequest request, String hospedeId) {
+        expirarSeNecessario(existing);
+        boolean sameRequest = existing.getHospedeId().equals(hospedeId)
+                && existing.getHotelId().equals(request.hotelId())
+                && existing.getQuartoId().equals(request.quartoId())
+                && existing.getEntrada().equals(request.entrada())
+                && existing.getSaida().equals(request.saida());
+        if (!sameRequest) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Idempotency-Key já utilizada em outra solicitação");
+        }
+        if (existing.getStatus() == ReservationStatus.CANCELADA
+                || existing.getStatus() == ReservationStatus.EXPIRADA) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Esta tentativa foi encerrada; use uma nova Idempotency-Key");
+        }
     }
 
     @Transactional

@@ -2,7 +2,9 @@ package br.com.reservafacil.pagamentos;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -11,21 +13,28 @@ import java.util.UUID;
 @Service
 public class PaymentService {
     private final PaymentRepository repository;
+    private final TransactionTemplate transactions;
 
-    public PaymentService(PaymentRepository repository) {
+    public PaymentService(PaymentRepository repository, PlatformTransactionManager transactionManager) {
         this.repository = repository;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
-    @Transactional
     public synchronized Payment criar(CreatePaymentRequest request, String key) {
-        Payment existente = repository.findByIdempotencyKey(key).orElse(null);
-        if (existente != null) {
-            return existente;
+        try {
+            return transactions.execute(status -> {
+                Payment existente = repository.findByIdempotencyKey(key).orElse(null);
+                if (existente != null) {
+                    return existente;
+                }
+                Payment payment = new Payment(request.reservaId(), request.valor(), request.moeda(),
+                        request.metodo(), request.simularRecusa()
+                        ? PaymentStatus.RECUSADO : PaymentStatus.APROVADO, key, Instant.now());
+                return repository.saveAndFlush(payment);
+            });
+        } catch (DataIntegrityViolationException exception) {
+            return repository.findByIdempotencyKey(key).orElseThrow(() -> exception);
         }
-        Payment payment = repository.saveAndFlush(new Payment(request.reservaId(), request.valor(),
-                request.moeda(), request.metodo(), request.simularRecusa()
-                ? PaymentStatus.RECUSADO : PaymentStatus.APROVADO, key, Instant.now()));
-        return payment;
     }
 
     public Payment obter(Long id) {
